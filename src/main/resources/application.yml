@@ -1,0 +1,40 @@
+spring:
+  jmx:
+    enabled: true
+  kafka:
+    bootstrapServers: ${BOOTSTRAP_SERVERS:localhost:9092}
+    security.protocol: ${SECURITY_PROTOCOL:PLAINTEXT}
+    ssl:
+      trust-store-location: file://${SSL_TRUST_STORE_LOCATION_INTERNAL:/opt/kafka-streams-template/ssl/truststore.jks}
+      trust-store-password: ${SSL_TRUST_STORE_PASSWORD}
+      key-store-location: file://${SSL_KEY_STORE_LOCATION_INTERNAL:/opt/kafka-streams-template/ssl/keystore.jks}
+      key-store-password: ${SSL_KEY_STORE_PASSWORD}
+
+mtb2kafka:
+  mtbProducerOutput:
+    destination: "mtb-out-default"
+  pseudonym:
+    enabled: true
+    gPasUrl: "http://localhost:8080"
+    target: "demo.study.demo"
+server:
+  port: 8880
+
+management:
+  server:
+    port: 8098
+  endpoints:
+    web:
+      exposure:
+        include: "health, prometheus, info, metric"
+  endpoint:
+    health:
+      show-details: always
+      enabled: true
+    info:
+      enabled: true
+
+logging:
+  level:
+    org.springframework.kafka.config: info
+    de.unimarburg.diz.mtbtokafka: debug
