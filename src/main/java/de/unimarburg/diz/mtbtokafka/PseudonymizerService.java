@@ -22,10 +22,15 @@ package de.unimarburg.diz.mtbtokafka;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.parser.IParser;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import de.unimarburg.diz.mtbtokafka.exceptions.PseudonymRequestFailed;
 import java.net.ConnectException;
 import java.util.HashMap;
+import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.Parameters;
+import org.hl7.fhir.r4.model.Parameters.ParametersParameterComponent;
+import org.hl7.fhir.r4.model.StringType;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,13 +59,16 @@ public class PseudonymizerService {
     private final Logger log = LoggerFactory.getLogger(PseudonymizerService.class);
 
     private final String gPasUrl;
+    private final String psnTargetDomain;
     private final RetryTemplate retryTemplate = defaultTemplate();
 
     private final FhirContext r4Context;
 
-    public PseudonymizerService(@Value("${mtb2kafka.pseudonym.gPasUrl}") String gPasBaseUrl) {
+    public PseudonymizerService(@Value("${mtb2kafka.pseudonym.gPasUrl}") String gPasBaseUrl,
+        @Value("${mtb2kafka.pseudonym.target}") String psnTargetDomain) {
 
         this.gPasUrl = gPasBaseUrl + "/ttp-fhir/fhir/gpas/$pseudonymizeAllowCreate";
+        this.psnTargetDomain = psnTargetDomain;
         this.r4Context = FhirContext.forR4();
     }
 
@@ -96,8 +104,7 @@ public class PseudonymizerService {
             }
 
             return responseEntity;
-        }
-         catch (Exception unexpected) {
+        } catch (Exception unexpected) {
             throw new PseudonymRequestFailed(
                 "API request due unexpected error unsuccessful gPas unsuccessful.", unexpected);
         }
@@ -111,7 +118,7 @@ public class PseudonymizerService {
         retryTemplate.setBackOffPolicy(backOffPolicy);
         HashMap<Class<? extends Throwable>, Boolean> retryableExceptions = new HashMap<>();
         retryableExceptions.put(RestClientException.class, true);
-        retryableExceptions.put(ConnectException.class,true);
+        retryableExceptions.put(ConnectException.class, true);
         RetryPolicy retryPolicy = new SimpleRetryPolicy(3, retryableExceptions);
         retryTemplate.setRetryPolicy(retryPolicy);
         retryTemplate.registerListener(new RetryListenerSupport() {
@@ -126,4 +133,30 @@ public class PseudonymizerService {
         return retryTemplate;
     }
 
+    public void pseudonymizeMtb(JsonNode jsonNode) {
+        final JsonNode patientNode = jsonNode.get("patient");
+        final JsonNode patientId = patientNode.get("id");
+
+        var requestParameters = new Parameters();
+        requestParameters.addParameter().setName("target")
+            .setValue(new StringType().setValue(psnTargetDomain));
+        requestParameters.addParameter().setName("original")
+            .setValue(new StringType().setValue(patientId.asText()));
+
+        var pseudonymParameter = getPseudonymParameters(requestParameters);
+
+        // todo: error handling
+        Identifier pseudonym = (Identifier) pseudonymParameter.getParameter().stream().findFirst()
+            .get().getPart().stream().filter(a -> a.getName().equals("pseudonym")).findFirst()
+            .orElseGet(
+                ParametersParameterComponent::new).getValue();
+
+        // pseudonym
+        var pidAsPseudonym = pseudonym.getSystem() + "|" + pseudonym.getValue();
+
+        // replace PID with pseudonym
+        ((ObjectNode) patientNode).put("id", pidAsPseudonym);
+
+        // TODO: replace other ID properties with hashed values
+    }
 }

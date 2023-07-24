@@ -24,20 +24,14 @@ import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import de.unimarburg.diz.mtbtokafka.exceptions.KafkaProduceFailed;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import org.hl7.fhir.r4.model.Identifier;
-import org.hl7.fhir.r4.model.Parameters;
-import org.hl7.fhir.r4.model.Parameters.ParametersParameterComponent;
-import org.hl7.fhir.r4.model.StringType;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -52,20 +46,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class RestForMtb {
 
     private final PseudonymizerService pseudonymizerService;
-    private final String psnTargetDomain;
     protected MtbProducer mtbProducer;
     private final Logger log = LoggerFactory.getLogger(RestForMtb.class);
     private final ObjectMapper objectMapper;
 
 
     @Autowired
-    public RestForMtb(MtbProducer mtbProducer, Optional<PseudonymizerService> pseudonymService,
-        @Value("${mtb2kafka.pseudonym.target}") String psnTargetDomain) {
+    public RestForMtb(MtbProducer mtbProducer, Optional<PseudonymizerService> pseudonymService) {
         this.mtbProducer = mtbProducer;
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
-        this.pseudonymizerService = pseudonymService.orElseGet(() -> null);
-        this.psnTargetDomain = psnTargetDomain;
+        this.pseudonymizerService = pseudonymService.orElse(null);
     }
 
 
@@ -79,11 +70,11 @@ public class RestForMtb {
     /**
      * Main entry for MTB file processing
      *
-     * @param newMtbFile
+     * @param newMtbFile input data
      * @throws JacksonException     if input is invalid json
      * @throws ExecutionException   produce data into kafka failed
      * @throws InterruptedException produce data into kafka failed
-     * @throws KafkaProduceFailed
+     * @throws KafkaProduceFailed   if produce to Kafka fails
      */
     @PostMapping("/mtbfile")
     @ResponseStatus(HttpStatus.ACCEPTED)
@@ -98,7 +89,9 @@ public class RestForMtb {
         try {
             var jsonNode = objectMapper.readTree(data);
 
-            pseudonymize(jsonNode);
+            if (pseudonymizerService != null) {
+                pseudonymizerService.pseudonymizeMtb(jsonNode);
+            }
 
             final String key = getKey(jsonNode);
 
@@ -117,37 +110,6 @@ public class RestForMtb {
             throw e;
         }
         return true;
-    }
-
-    private void pseudonymize(JsonNode jsonNode) {
-        if (pseudonymizerService == null) {
-            return;
-        }
-        final JsonNode patientNode = jsonNode.get("patient");
-        final JsonNode patientId = patientNode.get("id");
-
-        var requestParameters = new Parameters();
-        requestParameters.addParameter().setName("target")
-            .setValue(new StringType().setValue(psnTargetDomain));
-        requestParameters.addParameter().setName("original")
-            .setValue(new StringType().setValue(patientId.asText()));
-
-        var pseudonymParameter = pseudonymizerService.getPseudonymParameters(requestParameters);
-
-        // todo: error handling
-        Identifier pseudonym = (Identifier) pseudonymParameter.getParameter().stream().findFirst()
-            .get().getPart().stream().filter(a -> a.getName().equals("pseudonym")).findFirst()
-            .orElseGet(
-                ParametersParameterComponent::new).getValue();
-
-        // pseudonym
-        var pidAsPseudonym = pseudonym.getSystem() + "|" + pseudonym.getValue();
-
-        // replace PID with pseudonym
-        ((ObjectNode) patientNode).put("id", pidAsPseudonym);
-
-        // TODO: replace other ID properties with hashed values
-
     }
 
     @NotNull
